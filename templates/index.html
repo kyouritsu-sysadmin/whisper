@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>音声文字起こしWebアプリ</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <header class="site-header">
+        <h1>音声ファイル文字起こし</h1>
+    </header>
+    <div class="container">
+        <form id="upload-form">
+            <input type="file" id="audio-file" name="file" accept="audio/*" required>
+            <button type="submit">文字起こし開始</button>
+        </form>
+        <div class="progress-bar">
+            <div class="progress" id="progress-bar">0%</div>
+        </div>
+        <div id="progress-message">&nbsp;</div>
+        <div class="action-btns">
+            <button id="cancel-btn">キャンセル</button>
+            <button id="download-btn">文字起こし結果をダウンロード</button>
+        </div>
+    </div>
+    <footer class="site-footer">
+        &nbsp;&nbsp;Copyright&copy;&nbsp;&nbsp;2025&nbsp;&nbsp;株式会社&nbsp;共立電機製作所&nbsp;&nbsp;All&nbsp;rights&nbsp;reserved.
+    </footer>
+    <script>
+        // ベースURLをFlaskから受け取る
+        const BASE_URL = '{{ base_url }}';
+        
+        const form = document.getElementById('upload-form');
+        const fileInput = document.getElementById('audio-file');
+        const progressBar = document.getElementById('progress-bar');
+        const progressMsg = document.getElementById('progress-message');
+        const downloadBtn = document.getElementById('download-btn');
+        const cancelBtn = document.getElementById('cancel-btn');
+        let jobId = null;
+        let polling = false;
+
+        form.onsubmit = async function(e) {
+            e.preventDefault();
+            progressBar.style.width = '0%';
+            progressBar.textContent = '0%';
+            progressMsg.textContent = '';
+            downloadBtn.style.display = 'none';
+            cancelBtn.style.display = 'inline-block';
+            // ファイルアップロード
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+            const uploadRes = await fetch(BASE_URL + '/upload', { method: 'POST', body: formData });
+            const uploadData = await uploadRes.json();
+            if (!uploadRes.ok) {
+                alert('アップロード失敗: ' + (uploadData.error || '')); return;
+            }
+            // 文字起こし開始
+            const transRes = await fetch(BASE_URL + '/transcribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename: uploadData.filename })
+            });
+            const transData = await transRes.json();
+            if (!transRes.ok) {
+                alert('文字起こし開始失敗: ' + (transData.error || '')); return;
+            }
+            jobId = transData.job_id;
+            polling = true;
+            pollProgress();
+        };
+
+        async function pollProgress() {
+            if (!jobId) return;
+            let finished = false;
+            while (!finished && polling) {
+                const res = await fetch(`${BASE_URL}/progress/${jobId}`);
+                if (!res.ok) { progressBar.textContent = 'エラー'; progressMsg.textContent = 'エラー'; break; }
+                const data = await res.json();
+                progressMsg.textContent = data.message || '';
+                if (data.status === 'done') {
+                    progressBar.style.width = '100%';
+                    progressBar.textContent = '完了';
+                    progressMsg.textContent = data.message || '完了';
+                    downloadBtn.style.display = 'inline-block';
+                    cancelBtn.style.display = 'none';
+                    finished = true;
+                } else if (data.status === 'error') {
+                    progressBar.style.width = '100%';
+                    progressBar.textContent = 'エラー';
+                    progressMsg.textContent = data.message || 'エラー';
+                    cancelBtn.style.display = 'none';
+                    break;
+                } else if (data.status === 'cancelled') {
+                    progressBar.style.width = '100%';
+                    progressBar.textContent = 'キャンセル';
+                    progressMsg.textContent = data.message || 'キャンセルされました';
+                    cancelBtn.style.display = 'none';
+                    break;
+                } else {
+                    const p = data.progress || 0;
+                    progressBar.style.width = p + '%';
+                    progressBar.textContent = p + '%';
+                }
+                await new Promise(r => setTimeout(r, 1500));
+            }
+        }
+
+        cancelBtn.onclick = async function() {
+            if (!jobId) return;
+            polling = false;
+            await fetch(`${BASE_URL}/cancel/${jobId}`, { method: 'POST' });
+            progressMsg.textContent = 'キャンセル要求中...';
+        };
+
+        downloadBtn.onclick = function() {
+            if (!jobId) return;
+            window.location = `${BASE_URL}/download/${jobId}`;
+        };
+    </script>
+</body>
+</html> 
